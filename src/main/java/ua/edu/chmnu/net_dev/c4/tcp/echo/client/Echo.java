@@ -1,65 +1,53 @@
 package ua.edu.chmnu.net_dev.c4.tcp.echo.client;
 
-import ua.edu.chmnu.net_dev.c4.tcp.core.client.EndPoint;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.net.Socket;
+import java.io.*;
+import java.net.*;
 import java.util.Scanner;
 
 public class Echo {
     private final static int DEFAULT_PORT = 6710;
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) {
+        String serverAddress = "localhost"; // Або IP адреса сервера
+        int port = DEFAULT_PORT;
 
-        EndPoint endPoint;
+        try (Socket socket = new Socket(serverAddress, port);
+             var reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+             var writer = new PrintWriter(socket.getOutputStream(), true);
+             var scanner = new Scanner(System.in)) {
 
-        if (args.length > 0) {
-            endPoint = new EndPoint(args[0]);
-        } else {
-            endPoint = new EndPoint("localhost", DEFAULT_PORT);
-        }
+            System.out.println("Connected to server " + serverAddress + ":" + port);
 
-        try(Socket clientSocket = new Socket(endPoint.getHost(), endPoint.getPort())) {
+            // Отримуємо нік від користувача
+            System.out.print("Enter your nickname: ");
+            String nick = scanner.nextLine();
+            writer.println(nick); // Надсилаємо нік на сервер
 
-            System.out.println("Establish connection to " + endPoint.getHost() + ":" + endPoint.getPort());
-
-            try (
-                    var scanner = new Scanner(System.in);
-                    var writer = new PrintWriter(clientSocket.getOutputStream(), true);
-                    var reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()))
-            ) {
-                String promptNick = reader.readLine();
-
-                System.out.print(promptNick);
-
-                var nick = scanner.nextLine();
-
-                writer.println(nick);
-
-                while (!clientSocket.isClosed()) {
-                    String promptData = reader.readLine();
-
-                    System.out.print(promptData);
-
-                    var line = scanner.nextLine();
-
-                    if (line.equalsIgnoreCase("Q")) {
-                        System.out.println("Done client!");
-                        break;
+            // Отримуємо повідомлення від сервера
+            new Thread(() -> {
+                try {
+                    String serverMessage;
+                    while ((serverMessage = reader.readLine()) != null) {
+                        System.out.println(serverMessage); // Виводимо повідомлення від інших клієнтів
                     }
+                } catch (IOException e) {
+                    System.err.println("Error reading from server: " + e.getMessage());
+                }
+            }).start();
 
-                    writer.println(line);
+            // Надсилаємо повідомлення на сервер
+            String message;
+            while (true) {
+                System.out.print("Enter message (Q to quit): ");
+                message = scanner.nextLine();
+                writer.println(message);
 
-                    System.out.println("Waiting for response...");
-
-                    line = reader.readLine();
-
-                    System.out.println("Received response: " + line);
+                if (message.equalsIgnoreCase("Q")) {
+                    break; // Завершуємо роботу клієнта
                 }
             }
+        } catch (IOException e) {
+            System.err.println("Error connecting to server: " + e.getMessage());
         }
     }
 }

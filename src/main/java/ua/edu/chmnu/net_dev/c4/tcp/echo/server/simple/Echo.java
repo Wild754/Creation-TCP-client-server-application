@@ -1,100 +1,109 @@
 package ua.edu.chmnu.net_dev.c4.tcp.echo.server.simple;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.io.*;
+import java.net.*;
+import java.util.*;
+import java.util.concurrent.*;
 
 public class Echo {
+    private final static int DEFAULT_PORT = 6710;
+    private static final List<PrintWriter> clientWriters = new ArrayList<>(); // Список підключених клієнтів
+    private static boolean running = true; // Флаг для зупинки сервера
 
-   private final static int DEFAULT_PORT = 6710;
-
-    private static String inverse(String source) {
-        return new StringBuilder(source).reverse().toString();
-    }
-
-    private static Integer resolvePort(String src, int defaultPort) {
-        try {
-            return Integer.parseInt(src);
-        } catch (Exception e) {
-            return defaultPort;
-        }
-    }
-
+    // Метод для обробки кожного клієнта
     private static void processClient(Socket socket) {
+        try (
+                var ir = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                var writer = new PrintWriter(socket.getOutputStream(), true)
+        ) {
+            System.out.println("Connection established from: " + socket.getRemoteSocketAddress());
 
-        try (var ir = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-             var writer = new PrintWriter(socket.getOutputStream(), true)) {
-
-            System.out.println("Establishing connection from: " + socket.getRemoteSocketAddress());
-
-            String promptNick = "Enter your nick:";
-
-            writer.println(promptNick);
+            // Додаємо клієнта до списку активних підключень
+            synchronized (clientWriters) {
+                clientWriters.add(writer);
+            }
 
             String nick = ir.readLine();
-
-            String promptData = "Enter message (Q to quit):";
-
             System.out.println("Client nick: " + nick);
 
-            String inPrefix = "[" + nick + "] < ";
-
-            String outPrefix = "[" + nick + "] > ";
-
-            while (!socket.isClosed()) {
-                try {
-                    System.out.println("Waiting text from: " + nick);
-
-                    writer.println(promptData);
-
-                    String inLine = ir.readLine();
-
-                    if (inLine == null || inLine.isBlank() || inLine.equalsIgnoreCase("Q")) {
-                        break;
-                    }
-
-                    System.out.println(inPrefix + inLine);
-
-                    String outLine = inverse(inLine);
-
-                    writer.println(outLine);
-
-                    System.out.println(outPrefix + outLine);
-                } catch (Exception e) {
-                    e.printStackTrace();
+            String message;
+            while ((message = ir.readLine()) != null) {
+                if (message.equalsIgnoreCase("Q")) {
                     break;
+                }
+
+                System.out.println("Received message from " + nick + ": " + message);
+
+                // Пересилаємо повідомлення іншим клієнтам
+                synchronized (clientWriters) {
+                    for (PrintWriter clientWriter : clientWriters) {
+                        if (clientWriter != writer) {
+                            clientWriter.println("Message from " + nick + ": " + message);
+                        }
+                    }
                 }
             }
 
             System.out.println("Client " + nick + " disconnected");
-        } catch (Exception e) {
+            synchronized (clientWriters) {
+                clientWriters.remove(writer); // Видаляємо клієнта зі списку після відключення
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Метод для зупинки сервера
+    private static void stopServer(ServerSocket serverSocket) {
+        running = false;
+        try {
+            serverSocket.close();
+            System.out.println("Server is shutting down...");
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
     public static void main(String[] args) {
-
-        Integer port = DEFAULT_PORT;
-
-        if (args.length > 0 ) {
-            port = resolvePort(args[0], DEFAULT_PORT);
-        }
+        int port = DEFAULT_PORT;
 
         try (ServerSocket serverSocket = new ServerSocket(port)) {
+            System.out.println("Server is running on port " + port);
 
-            System.out.println("Listening on port " + port);
-            while (!serverSocket.isClosed()) {
-                System.out.println("Waiting for connection...");
-                try (Socket socket = serverSocket.accept()) {
-                    processClient(socket);
+            // Окремий потік для зупинки сервера за командою
+            new Thread(() -> {
+                try (BufferedReader consoleReader = new BufferedReader(new InputStreamReader(System.in))) {
+                    while (running) {
+                        String command = consoleReader.readLine();
+                        if ("exit".equalsIgnoreCase(command)) {
+                            stopServer(serverSocket); // Викликаємо метод для зупинки сервера
+                            break;
+                        }
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
                 }
+            }).start();
 
+            // Основний цикл для обробки клієнтів
+            while (running) {
+                System.out.println("Waiting for a client...");
+                try {
+                    Socket socket = serverSocket.accept();
+                    System.out.println("Client connected: " + socket.getRemoteSocketAddress());
+                    new Thread(() -> processClient(socket)).start(); // Обробляємо кожного клієнта в окремому потоці
+                } catch (IOException e) {
+                    if (!running) {
+                        System.out.println("Server stopped accepting new connections.");
+                    } else {
+                        System.err.println("Error accepting client connection: " + e.getMessage());
+                    }
+                }
             }
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            System.err.println("Could not start server on port " + port + ": " + e.getMessage());
         }
+
+        System.out.println("Server has been stopped.");
     }
 }
